@@ -1560,6 +1560,10 @@ def betweenness_centrality(graph, normalized=True, endpoints=False, parallel_thr
     defaults to 50). If the function will be running in parallel the env var
     ``RAYON_NUM_THREADS`` can be used to adjust how many threads will be used.
 
+    See Also
+    --------
+    edge_betweenness_centrality
+
     :param PyDiGraph graph: The input graph
     :param bool normalized: Whether to normalize the betweenness scores by
         the number of distinct paths between all pairs of nodes.
@@ -1592,6 +1596,124 @@ def _graph_betweenness_centrality(graph, normalized=True, endpoints=False, paral
         graph,
         normalized=normalized,
         endpoints=endpoints,
+        parallel_threshold=parallel_threshold,
+    )
+
+
+@functools.singledispatch
+def closeness_centrality(graph, wf_improved=True):
+    r"""Compute the closeness centrality of each node in a graph object.
+
+    The closeness centrality of a node :math:`u` is defined as the
+    reciprocal of the average shortest path distance to :math:`u` over all
+    :math:`n-1` reachable nodes in the graph. In it's general form this can
+    be expressed as:
+
+    .. math::
+
+        C(u) = \frac{n - 1}{\sum_{v=1}^{n-1} d(v, u)},
+
+    where:
+
+      * :math:`d(v, u)` - the shortest-path distance between :math:`v` and
+        :math:`u`
+      * :math:`n` - the number of nodes that can reach :math:`u`.
+
+    In the case of a graphs with more than one connected component there is
+    an alternative improved formula that calculates the closeness centrality
+    as "a ratio of the fraction of actors in the group who are reachable, to
+    the average distance" [WF]_. This can be expressed as
+
+    .. math::
+
+        C_{WF}(u) = \frac{n-1}{N-1} \frac{n - 1}{\sum_{v=1}^{n-1} d(v, u)},
+
+    where :math:`N` is the number of nodes in the graph. This alternative
+    formula can be used with the ``wf_improved`` argument.
+
+    :param graph: The input graph. Can either be a
+        :class:`~retworkx.PyGraph` or :class:`~retworkx.PyDiGraph`.
+    :param bool wf_improved: This is optional; the default is True. If True,
+        scale by the fraction of nodes reachable.
+
+    :returns: A dictionary mapping each node index to its closeness centrality.
+    :rtype: dict
+
+    .. [WF] Wasserman, S., & Faust, K. (1994). Social Network Analysis:
+      Methods and Applications (Structural Analysis in the Social Sciences).
+      Cambridge: Cambridge University Press. doi:10.1017/CBO9780511815478
+    """
+    raise TypeError("Invalid input type %s for graph" % type(graph))
+
+
+@closeness_centrality.register(PyDiGraph)
+def _digraph_closeness_centrality(graph, wf_improved=True):
+    return digraph_closeness_centrality(graph, wf_improved=wf_improved)
+
+
+@closeness_centrality.register(PyGraph)
+def _graph_closeness_centrality(graph, wf_improved=True):
+    return graph_closeness_centrality(graph, wf_improved=wf_improved)
+
+
+@functools.singledispatch
+def edge_betweenness_centrality(graph, normalized=True, parallel_threshold=50):
+    r"""Compute the edge betweenness centrality of all edges in a graph.
+
+    Edge betweenness centrality of an edge :math:`e` is the sum of the
+    fraction of all-pairs shortest paths that pass through :math`e`
+
+    .. math::
+
+       c_B(e) = \sum_{s,t \in V} \frac{\sigma(s, t|e)}{\sigma(s, t)}
+
+    where :math:`V` is the set of nodes, :math:`\sigma(s, t)` is the
+    number of shortest :math:`(s, t)`-paths, and :math:`\sigma(s, t|e)` is
+    the number of those paths passing through edge :math:`e`.
+
+    The above definition and the algorithm used in this function is based on:
+
+    Ulrik Brandes, On Variants of Shortest-Path Betweenness Centrality
+    and their Generic Computation. Social Networks 30(2):136-145, 2008.
+
+    This function is multithreaded and will run in parallel if the number
+    of nodes in the graph is above the value of ``parallel_threshold`` (it
+    defaults to 50). If the function will be running in parallel the env var
+    ``RAYON_NUM_THREADS`` can be used to adjust how many threads will be used.
+
+    See Also
+    --------
+    betweenness_centrality
+
+    :param PyGraph graph: The input graph
+    :param bool normalized: Whether to normalize the betweenness scores by the
+        number of distinct paths between all pairs of nodes.
+    :param int parallel_threshold: The number of nodes to calculate
+        the edge betweenness centrality in parallel at if the number of nodes in
+        the graph is less than this value it will run in a single thread. The
+        default value is 50
+
+    :returns: a read-only dict-like object whose keys are edges and values are the
+        betweenness score for each node.
+    :rtype: EdgeCentralityMapping
+    """
+    raise TypeError("Invalid input type %s for graph" % type(graph))
+
+
+@edge_betweenness_centrality.register(PyDiGraph)
+def _digraph_edge_betweenness_centrality(graph, normalized=True, parallel_threshold=50):
+    return digraph_edge_betweenness_centrality(
+        graph,
+        normalized=normalized,
+        parallel_threshold=parallel_threshold,
+    )
+
+
+@edge_betweenness_centrality.register(PyGraph)
+def _graph_edge_betweenness_centrality(graph, normalized=True, parallel_threshold=50):
+    return graph_edge_betweenness_centrality(
+        graph,
+        normalized=normalized,
         parallel_threshold=parallel_threshold,
     )
 
@@ -1651,6 +1773,82 @@ def _graph_eigenvector_centrality(
 ):
     return graph_eigenvector_centrality(
         graph, weight_fn=weight_fn, default_weight=default_weight, max_iter=max_iter, tol=tol
+    )
+
+
+@functools.singledispatch
+def katz_centrality(
+    graph, alpha=0.1, beta=1.0, weight_fn=None, default_weight=1.0, max_iter=100, tol=1e-6
+):
+    """Compute the Katz centrality of a graph.
+
+    For details on the Katz centrality refer to:
+
+    Leo Katz. “A New Status Index Derived from Sociometric Index.”
+    Psychometrika 18(1):39–43, 1953
+    <https://link.springer.com/content/pdf/10.1007/BF02289026.pdf>
+
+    This function uses a power iteration method to compute the eigenvector
+    and convergence is not guaranteed. The function will stop when `max_iter`
+    iterations is reached or when the computed vector between two iterations
+    is smaller than the error tolerance multiplied by the number of nodes.
+    The implementation of this algorithm is based on the NetworkX
+    `katz_centrality() <https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.centrality.katz_centrality.html>`__
+    function.
+
+    In the case of multigraphs the weights of any parallel edges will be
+    summed when computing the Katz centrality.
+
+    :param graph: Graph to be used. Can either be a
+        :class:`~rustworkx.PyGraph` or :class:`~rustworkx.PyDiGraph`.
+    :param float alpha: Attenuation factor. If this is not specified default value of 0.1 is used.
+    :param float | dict beta: Immediate neighbourhood weights. If a float is provided, the neighbourhood
+        weight is used for all nodes. If a dictionary is provided, it must contain all node indices.
+        If beta is not specified, a default value of 1.0 is used.
+    :param weight_fn: An optional input callable that will be passed the edge's
+        payload object and is expected to return a `float` weight for that edge.
+        If this is not specified ``default_weight`` will be used as the weight
+        for every edge in ``graph``
+    :param float default_weight: If ``weight_fn`` is not set the default weight
+        value to use for the weight of all edges
+    :param int max_iter: The maximum number of iterations in the power method. If
+        not specified a default value of 100 is used.
+    :param float tol: The error tolerance used when checking for convergence in the
+        power method. If this is not specified default value of 1e-6 is used.
+
+    :returns: a read-only dict-like object whose keys are the node indices and values are the
+         centrality score for that node.
+    :rtype: CentralityMapping
+    """
+
+
+@katz_centrality.register(PyDiGraph)
+def _digraph_katz_centrality(
+    graph, alpha=0.1, beta=1.0, weight_fn=None, default_weight=1.0, max_iter=1000, tol=1e-6
+):
+    return digraph_katz_centrality(
+        graph,
+        alpha=alpha,
+        beta=beta,
+        weight_fn=weight_fn,
+        default_weight=default_weight,
+        max_iter=max_iter,
+        tol=tol,
+    )
+
+
+@katz_centrality.register(PyGraph)
+def _graph_katz_centrality(
+    graph, alpha=0.1, beta=1.0, weight_fn=None, default_weight=1.0, max_iter=1000, tol=1e-6
+):
+    return graph_katz_centrality(
+        graph,
+        alpha=alpha,
+        beta=beta,
+        weight_fn=weight_fn,
+        default_weight=default_weight,
+        max_iter=max_iter,
+        tol=tol,
     )
 
 
@@ -2382,3 +2580,46 @@ def _graph_node_link_json(graph, path=None, graph_attrs=None, node_attrs=None, e
     return graph_node_link_json(
         graph, path=path, graph_attrs=graph_attrs, node_attrs=node_attrs, edge_attrs=edge_attrs
     )
+
+
+@functools.singledispatch
+def longest_simple_path(graph):
+    """Return a longest simple path in the graph
+
+    This function searches computes all pairs of all simple paths and returns
+    a path of the longest length from that set. It is roughly equivalent to
+    running something like::
+
+        from rustworkx import all_pairs_all_simple_paths
+
+        max((y.values for y in all_pairs_all_simple_paths(graph).values()), key=lambda x: len(x))
+
+    but this function will be more efficient than using ``max()`` as the search
+    is evaluated in parallel before returning to Python. In the case of multiple
+    paths of the same maximum length being present in the graph only one will be
+    provided. There are no guarantees on which of the multiple longest paths
+    will be returned (as it is determined by the parallel execution order). This
+    is a tradeoff to improve runtime performance. If a stable return is required
+    in such case consider using the ``max()`` equivalent above instead.
+
+    This function is multithreaded and will launch a thread pool with threads
+    equal to the number of CPUs by default. You can tune the number of threads
+    with the ``RAYON_NUM_THREADS`` environment variable. For example, setting
+    ``RAYON_NUM_THREADS=4`` would limit the thread pool to 4 threads.
+
+    :param PyGraph graph: The graph to find the longest path in
+
+    :returns: A sequence of node indices that represent the longest simple graph
+        found in the graph. If the graph is empty ``None`` will be returned instead.
+    :rtype: NodeIndices
+    """
+
+
+@longest_simple_path.register(PyDiGraph)
+def _digraph_longest_simple_path(graph):
+    return digraph_longest_simple_path(graph)
+
+
+@longest_simple_path.register(PyGraph)
+def _graph_longest_simple_path(graph):
+    return graph_longest_simple_path(graph)
